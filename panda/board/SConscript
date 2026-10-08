@@ -1,0 +1,28 @@
+import os
+
+Import('build_project', 'base_project_f4', 'base_project_h7')
+
+
+def copy_project(project):
+  return {
+    **project,
+    "PROJECT_FLAGS": project["PROJECT_FLAGS"].copy(),
+  }
+
+
+build_projects = {
+  "panda": base_project_f4,
+  "panda_black": copy_project(base_project_f4),
+  "panda_h7": base_project_h7,
+}
+
+build_projects["panda_black"]["PROJECT_FLAGS"].append("-DBOARD_BLACK_ONLY")
+
+for project_name, project in build_projects.items():
+  flags = [
+    "-DPANDA",
+  ]
+  if ("ENABLE_SPI" in os.environ or "h7" in project_name):
+    flags.append('-DENABLE_SPI')
+
+  build_project(project_name, project, flags)

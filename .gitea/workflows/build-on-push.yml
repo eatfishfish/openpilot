@@ -1,0 +1,129 @@
+name: Build On Push
+
+on:
+  push:
+    branches:
+      - pre-build
+      - yolo
+
+jobs:
+  build:
+    runs-on: op
+    env:
+      UV_CACHE_DIR: /data/uv-cache
+      UV_INSTALL_DIR: /data/uv-bin
+
+    steps:
+      # 1. 从 Gitea 克隆代码（带详细输出）
+      - name: Checkout repository from Gitea
+        env:
+          REPO_USERNAME: ${{ secrets.REPO_USERNAME }}
+          REPO_PASSWORD: ${{ secrets.REPO_PASSWORD }}
+        run: |
+          echo "=== Starting checkout ==="
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Commit SHA: ${GITHUB_SHA}"
+          echo "Branch: ${GITHUB_REF}"
+
+          # 克隆代码
+          if [ -z "${REPO_USERNAME}" ] || [ -z "${REPO_PASSWORD}" ]; then
+            echo "REPO_USERNAME or REPO_PASSWORD secret is not set"
+            exit 1
+          fi
+
+          AUTH_HEADER="$(printf '%s:%s' "${REPO_USERNAME}" "${REPO_PASSWORD}" | base64 -w0)"
+          git -c http.extraHeader="Authorization: Basic ${AUTH_HEADER}" \
+            clone http://385770bs19.zicp.vip:3000/${GITHUB_REPOSITORY}.git .
+          git checkout ${GITHUB_SHA}
+
+          # 显示信息
+          echo "=== Checkout completed ==="
+          echo "Current directory: $(pwd)"
+          echo "Files count: $(find . -type f | wc -l)"
+          echo "Disk usage: $(du -sh . | cut -f1)"
+          echo "Git status:"
+          git status
+
+      # 2. 显示构建环境
+      - name: Show build environment
+        run: |
+          echo "=== Build Environment ==="
+          echo "Current directory: $(pwd)"
+          PYTHON_BIN="$(command -v python || command -v python3 || true)"
+          if [ -n "${PYTHON_BIN}" ]; then
+            echo "Python path: ${PYTHON_BIN}"
+            echo "Python version: $(${PYTHON_BIN} --version)"
+          else
+            echo "Python not found"
+          fi
+          echo "UV version: $(uv --version 2>/dev/null || echo 'UV not found')"
+          echo "SCons version: $(scons --version 2>/dev/null | head -n1 || echo 'SCons not found')"
+          echo "UV cache dir: ${UV_CACHE_DIR}"
+
+      # 3. 安装系统依赖
+      - name: Install system dependencies
+        run: |
+          echo "=== Installing system dependencies ==="
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl libjpeg-dev libturbojpeg0-dev rsync
+          sudo apt install -y libva-dev libva-drm2 vainfo mesa-va-drivers
+          dpkg -s libjpeg-dev
+          dpkg -s libturbojpeg0-dev
+          test -f /usr/include/jpeglib.h
+          test -f /usr/include/turbojpeg.h
+          echo "Dependencies installed successfully"
+
+      # 4. 同步代码到 openpilot 目录
+      - name: Sync checkout to openpilot directory
+        run: |
+          echo "=== Syncing to /data/openpilot/ ==="
+          echo "Source size: $(du -sh . | cut -f1)"
+
+          # 确保目标目录存在
+          sudo mkdir -p /data/openpilot/
+
+          # 执行同步
+          sudo rsync -a --delete \
+            --exclude .git \
+            --exclude .venv \
+            --exclude __pycache__ \
+            --exclude '*.pyc' \
+            ./ /data/openpilot/
+
+          echo "Sync completed"
+          echo "Target size: $(sudo du -sh /data/openpilot/ | cut -f1)"
+
+      # 5. 构建 dragonpilot
+      - name: Build dragonpilot
+        env:
+          CI: "1"
+          UV_SYNC_ARGS: "--frozen --all-extras"
+        shell: bash
+        run: |
+          echo "=== Starting build ==="
+          export PATH="/data/uv-bin:${PATH}"
+          cd /data/openpilot/
+          mkdir -p "${UV_CACHE_DIR}"
+
+          echo "Installing Python dependencies..."
+          ./tools/install_python_dependencies.sh
+
+          echo "Activating virtual environment..."
+          source .venv/bin/activate
+          python --version
+
+          echo "Starting scons build..."
+          scons
+
+          echo "=== Build completed ==="
+
+      # 6. 运行 YOLO 单元测试
+      - name: Test YOLO modeld integration
+        shell: bash
+        run: |
+          set -e
+          export PATH="/data/uv-bin:${PATH}"
+          cd /data/openpilot/
+          source .venv/bin/activate
+          python -c "import pytest; print('pytest', pytest.__version__)"
+          pytest selfdrive/modeld/tests/test_yolo.py selfdrive/controls/tests/test_radard_yolo.py -n 0 -q

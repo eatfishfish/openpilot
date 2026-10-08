@@ -1,0 +1,12 @@
+Import('env', 'arch', 'common', 'messaging', 'visionipc')
+
+if arch != "Darwin":
+  streamup_src = 'streamup845.cc' if arch == "larch64" else 'streamup.cc'
+  libs = [visionipc, messaging, common,
+          'avcodec', 'avutil',
+          'OpenCL',
+          'pthread']
+  if arch == "larch64":
+    libs += ['yuv']
+  env.Library('fp', [streamup_src], LIBS=libs)
+  env.Program('h264_streamer', ['main.cc', streamup_src], LIBS=libs)

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenPilot H.264 Preview</title>
+  <style>
+    :root {
+      --bg: #0b1117;
+      --panel: #121c24;
+      --text: #edf7f6;
+      --muted: #8aa0a8;
+      --accent: #38d39f;
+      --warn: #ffb86b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      font-family: "Aptos Display", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(56, 211, 159, 0.18), transparent 28rem),
+        linear-gradient(145deg, #071017 0%, #101820 52%, #172016 100%);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    main {
+      width: min(1100px, 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 28px;
+      background: rgba(18, 28, 36, 0.82);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+      overflow: hidden;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 18px 22px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(22px, 4vw, 38px);
+      letter-spacing: -0.04em;
+    }
+
+    .status {
+      min-width: 116px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      color: #08120f;
+      background: var(--warn);
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .status.live {
+      background: var(--accent);
+    }
+
+    .camera-switcher {
+      display: flex;
+      gap: 10px;
+      padding: 14px 22px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      padding: 10px 16px;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+    }
+
+    button.active {
+      color: #07120f;
+      background: var(--accent);
+      border-color: transparent;
+    }
+
+    .stage {
+      position: relative;
+      background: #020607;
+      aspect-ratio: 16 / 9;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .empty {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 22px;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 10px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>H.264 Camera Preview</h1>
+      <div id="status" class="status">连接中</div>
+    </header>
+    <nav class="camera-switcher" aria-label="选择摄像头">
+      <button class="active" data-camera="roadCameraState">Road Camera</button>
+      <button data-camera="wideRoadCameraState">Wide Road Camera</button>
+    </nav>
+    <section class="stage">
+      <canvas id="frame"></canvas>
+      <div id="empty" class="empty">等待摄像头推送画面...</div>
+    </section>
+    <footer>
+      <span>端口 8089 / WebSocket: <strong>/stream?camera=...</strong></span>
+      <span id="meta">0 frames</span>
+    </footer>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("frame");
+    const context = canvas.getContext("2d");
+    const empty = document.getElementById("empty");
+    const statusEl = document.getElementById("status");
+    const meta = document.getElementById("meta");
+    const cameraButtons = [...document.querySelectorAll("[data-camera]")];
+    let currentCamera = "roadCameraState";
+    let frameCount = 0;
+    let chunkCount = 0;
+    let decoder = null;
+    let decoderConfigured = false;
+    let timestamp = 0;
+    let ws = null;
+
+    function findNalUnits(data) {
+      const units = [];
+      let start = -1;
+      let index = 0;
+      while (index + 3 < data.length) {
+        let prefixLength = 0;
+        if (data[index] === 0 && data[index + 1] === 0 && data[index + 2] === 1) {
+          prefixLength = 3;
+        } else if (index + 4 < data.length &&
+                   data[index] === 0 && data[index + 1] === 0 &&
+                   data[index + 2] === 0 && data[index + 3] === 1) {
+          prefixLength = 4;
+        }
+        if (!prefixLength) {
+          index += 1;
+          continue;
+        }
+        if (start >= 0) {
+          units.push(data.subarray(start, index));
+        }
+        start = index + prefixLength;
+        index = start;
+      }
+      if (start >= 0 && start < data.length) {
+        units.push(data.subarray(start));
+      }
+      return units;
+    }
+
+    function inspectH264(data) {
+      let key = false;
+      let codec = null;
+      for (const nal of findNalUnits(data)) {
+        if (!nal.length) continue;
+        const type = nal[0] & 0x1f;
+        key ||= type === 5;
+        if (type === 7 && nal.length >= 4) {
+          codec = `avc1.${[nal[1], nal[2], nal[3]]
+            .map((value) => value.toString(16).padStart(2, "0"))
+            .join("").toUpperCase()}`;
+        }
+      }
+      return { key, codec };
+    }
+
+    function closeDecoder() {
+      if (decoder) {
+        try {
+          decoder.close();
+        } catch (_) {
+        }
+      }
+      decoder = null;
+      decoderConfigured = false;
+      timestamp = 0;
+    }
+
+    function createDecoder() {
+      if (!("VideoDecoder" in window)) {
+        statusEl.textContent = "浏览器不支持 WebCodecs";
+        empty.textContent = "请使用支持 WebCodecs H.264 的 Chrome/Edge 浏览器";
+        return false;
+      }
+      decoder = new VideoDecoder({
+        output: (videoFrame) => {
+          if (canvas.width !== videoFrame.displayWidth || canvas.height !== videoFrame.displayHeight) {
+            canvas.width = videoFrame.displayWidth;
+            canvas.height = videoFrame.displayHeight;
+          }
+          context.drawImage(videoFrame, 0, 0, canvas.width, canvas.height);
+          videoFrame.close();
+          empty.style.display = "none";
+          frameCount += 1;
+          meta.textContent = `${frameCount} frames / ${currentCamera}`;
+        },
+        error: (error) => {
+          console.error("H.264 decoder error", error);
+          statusEl.textContent = "解码错误";
+          statusEl.classList.remove("live");
+          closeDecoder();
+        },
+      });
+      return true;
+    }
+
+    function resetFrameState() {
+      closeDecoder();
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      empty.style.display = "grid";
+      empty.textContent = "等待 H.264 关键帧...";
+      frameCount = 0;
+      chunkCount = 0;
+      meta.textContent = `0 frames / ${currentCamera}`;
+    }
+
+    function connect() {
+      const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const camera = encodeURIComponent(currentCamera);
+      ws = new WebSocket(`${wsProtocol}//${location.host}/stream?camera=${camera}`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        statusEl.textContent = "Live";
+        statusEl.classList.add("live");
+      };
+
+      ws.onmessage = (event) => {
+        const data = new Uint8Array(event.data);
+        const info = inspectH264(data);
+
+        if (!decoderConfigured) {
+          if (!info.key || !info.codec) {
+            return;
+          }
+          if (!decoder && !createDecoder()) {
+            return;
+          }
+          try {
+            decoder.configure({
+              codec: info.codec,
+              optimizeForLatency: true,
+              hardwareAcceleration: "prefer-hardware",
+            });
+            decoderConfigured = true;
+          } catch (error) {
+            console.error("VideoDecoder configure failed", error);
+            statusEl.textContent = "不支持该 H.264";
+            closeDecoder();
+            return;
+          }
+        }
+
+        try {
+          decoder.decode(new EncodedVideoChunk({
+            type: info.key ? "key" : "delta",
+            timestamp,
+            data,
+          }));
+          timestamp += 50_000;
+          chunkCount += 1;
+        } catch (error) {
+          console.error("VideoDecoder decode failed", error);
+          closeDecoder();
+        }
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = "重连中";
+        statusEl.classList.remove("live");
+        setTimeout(connect, 1200);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
+    window.addEventListener("beforeunload", closeDecoder);
+
+    cameraButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextCamera = button.dataset.camera;
+        if (nextCamera === currentCamera) {
+          return;
+        }
+        currentCamera = nextCamera;
+        cameraButtons.forEach((item) => item.classList.toggle("active", item === button));
+        if (ws) {
+          ws.onclose = null;
+          ws.close();
+        }
+        statusEl.textContent = "连接中";
+        statusEl.classList.remove("live");
+        resetFrameState();
+        connect();
+      });
+    });
+
+    resetFrameState();
+    connect();
+  </script>
+</body>
+</html>
