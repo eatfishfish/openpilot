@@ -33,7 +33,17 @@ FOCAL_LENGTH_BASELINE = DEVICE_CAMERAS[("tici", "ar0231")].fcam.focal_length
 YOLO_RADAR_MIN_TRACK_COUNT = 3
 YOLO_RADAR_MIN_DISTANCE_ERROR = 5.0
 YOLO_RADAR_DISTANCE_ERROR_RATIO = 0.35
-YOLO_RADAR_MAX_LATERAL_ERROR = 1.25
+YOLO_RADAR_LATERAL_ERROR_DISTANCES = (0.0, 20.0, 50.0, 100.0)
+YOLO_RADAR_LATERAL_ERROR_LIMITS = (0.6, 0.8, 1.1, 1.5)
+
+
+def yolo_radar_max_lateral_error(distance_m: float) -> float:
+  """Use a strict near-field gate and allow more visual error at range."""
+  return float(np.interp(
+    max(0.0, distance_m),
+    YOLO_RADAR_LATERAL_ERROR_DISTANCES,
+    YOLO_RADAR_LATERAL_ERROR_LIMITS,
+  ))
 
 
 class FocalLengthEstimator:
@@ -194,11 +204,12 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader,
     # visual distance is only a matching hint; radar remains authoritative.
     max_distance_error = max(YOLO_RADAR_MIN_DISTANCE_ERROR,
                               offset_vision_dist * YOLO_RADAR_DISTANCE_ERROR_RATIO)
+    max_lateral_error = yolo_radar_max_lateral_error(offset_vision_dist)
     candidates = [
       track for track in tracks.values()
       if getattr(track, "cnt", 0) >= YOLO_RADAR_MIN_TRACK_COUNT
       and abs(track.dRel - offset_vision_dist) <= max_distance_error
-      and abs(track.yRel - expected_y) <= YOLO_RADAR_MAX_LATERAL_ERROR
+      and abs(track.yRel - expected_y) <= max_lateral_error
     ]
     if not candidates:
       return None
@@ -206,7 +217,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader,
       candidates,
       key=lambda track: (
         abs(track.dRel - offset_vision_dist) / max_distance_error
-        + abs(track.yRel - expected_y) / YOLO_RADAR_MAX_LATERAL_ERROR,
+        + abs(track.yRel - expected_y) / max_lateral_error,
       ),
     )
 

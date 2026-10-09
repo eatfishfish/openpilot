@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from openpilot.selfdrive.controls.radard import get_lead
+from openpilot.selfdrive.controls.radard import get_lead, yolo_radar_max_lateral_error
 
 
 def make_lead(prob: float = 0.9, yolo_lead: bool = False, x: float = 20.0):
@@ -146,6 +146,46 @@ def test_yolo_lead_rejects_radar_track_in_another_lateral_position():
                   lead_msg=make_lead(yolo_lead=True), model_v_ego=10.0)
 
   assert not lead["status"]
+
+
+def test_yolo_radar_lateral_error_increases_with_distance():
+  assert yolo_radar_max_lateral_error(0.0) == 0.6
+  assert yolo_radar_max_lateral_error(20.0) == 0.8
+  assert yolo_radar_max_lateral_error(50.0) == 1.1
+  assert yolo_radar_max_lateral_error(100.0) == 1.5
+  assert yolo_radar_max_lateral_error(150.0) == 1.5
+
+
+def test_yolo_lead_uses_strict_near_lateral_gate():
+  radar_track = SimpleNamespace(
+    cnt=3,
+    dRel=18.5,
+    yRel=0.9,
+    vRel=0.0,
+    potential_low_speed_lead=lambda v_ego: False,
+    get_RadarState=lambda model_prob: {"status": True, "radar": True, "dRel": 18.5},
+  )
+
+  lead = get_lead(v_ego=10.0, ready=True, tracks={1: radar_track},
+                  lead_msg=make_lead(yolo_lead=True), model_v_ego=10.0)
+
+  assert not lead["status"]
+
+
+def test_yolo_lead_allows_larger_far_lateral_error():
+  radar_track = SimpleNamespace(
+    cnt=3,
+    dRel=98.5,
+    yRel=1.4,
+    vRel=0.0,
+    potential_low_speed_lead=lambda v_ego: False,
+    get_RadarState=lambda model_prob: {"status": True, "radar": True, "dRel": 98.5},
+  )
+
+  lead = get_lead(v_ego=10.0, ready=True, tracks={1: radar_track},
+                  lead_msg=make_lead(yolo_lead=True, x=100.0), model_v_ego=10.0)
+
+  assert lead["status"]
 
 
 def test_yolo_lead_does_not_use_unrelated_low_speed_radar_track():
