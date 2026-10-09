@@ -51,6 +51,10 @@ _last_yolo_rejection_reason: str | None = None
 _last_yolo_rejection_log_t = 0.0
 
 
+def get_last_yolo_rejection_reason() -> str | None:
+  return _last_yolo_rejection_reason
+
+
 @dataclass
 class YoloLead:
   prob: float

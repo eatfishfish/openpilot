@@ -41,7 +41,13 @@ from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, 
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
-from openpilot.selfdrive.modeld.yolo import YOLO_ENABLED, RoadYoloRunner, apply_yolo_lead_if_needed
+from openpilot.selfdrive.modeld.yolo import (
+  YOLO_ENABLED,
+  RoadYoloRunner,
+  apply_yolo_lead_if_needed,
+  get_last_yolo_rejection_reason,
+)
+from openpilot.selfdrive.modeld.yolo_eval_logger import YoloEvalLogger
 from openpilot.selfdrive.modeld.models.commonmodel_pyx import DrivingModelFrame, CLContext
 from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from_opencl_address
 from dragonpilot.selfdrive.controls.lib.road_edge_detector import RoadEdgeDetector
@@ -60,6 +66,19 @@ POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.p
 LAT_SMOOTH_SECONDS = 0.1
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
+
+
+def _model_output_value(output: dict[str, np.ndarray], name: str,
+                        indexes: tuple[int, ...]) -> float | None:
+  try:
+    value = output[name]
+    for index in indexes:
+      value = value[index]
+    value = float(value)
+    return value if np.isfinite(value) else None
+  except (KeyError, IndexError, TypeError, ValueError):
+    return None
+
 
 def set_modeld_cpu_affinity() -> int | None:
   """Pin modeld's main realtime thread independently from the YOLO thread."""
@@ -272,6 +291,7 @@ def main(demo=False):
     cl_context=cl_context,
   )
   yolo_runner.start()
+  yolo_eval_logger = YoloEvalLogger("modeld")
 
   # messaging
   pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry", "modelExt"])
@@ -406,7 +426,20 @@ def main(demo=False):
     yolo_lead = None if prepare_only else yolo_runner.wait_for_frame(meta_main.frame_id, yolo_wait_ms)
 
     if model_output is not None:
+      model_lead_snapshot = {
+        "prob": _model_output_value(model_output, "lead_prob", (0, 0)),
+        "x": _model_output_value(model_output, "lead", (0, 0, 0)),
+        "y": _model_output_value(model_output, "lead", (0, 0, 1)),
+      }
       yolo_lead_used = apply_yolo_lead_if_needed(model_output, yolo_lead)
+      yolo_eval_logger.record_model_frame(
+        meta_main.frame_id,
+        model_output,
+        yolo_lead,
+        yolo_lead_used,
+        get_last_yolo_rejection_reason(),
+        model_lead_snapshot,
+      )
 
       modelv2_send = messaging.new_message('modelV2')
       drivingdata_send = messaging.new_message('drivingModelData')

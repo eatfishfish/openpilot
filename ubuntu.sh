@@ -55,7 +55,7 @@ if [ $ProcNumber -le 0 ];then
    cd /home/my/openpilot
 
    cd /home/my/openpilot/system/manager
-   DP_YOLO_USE_ONLY_LEAD=0 USE_WEBCAM=1 ./manager.py
+    DP_YOLO_EVAL_ENABLED=1 DP_YOLO_USE_ONLY_LEAD=0 USE_WEBCAM=1 ./manager.py
    #./launch_openpilot.sh
    cd /home/my/openpilot
 else

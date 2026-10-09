@@ -10,6 +10,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.modeld.yolo_eval_logger import YoloEvalLogger
 from openpilot.common.simple_kalman import KF1D
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 
@@ -284,6 +285,7 @@ class RadarD:
 
     self.ready = False
     self.focal_length_estimator = FocalLengthEstimator()
+    self.yolo_eval_logger = YoloEvalLogger("radard")
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
@@ -329,6 +331,12 @@ class RadarD:
       self.focal_length_estimator.update(self.current_time, self.v_ego, self.ready, leads_v3[0], self.tracks)
       self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, low_speed_override=True)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, low_speed_override=False)
+      self.yolo_eval_logger.record_radar_frame(
+        sm['modelV2'].frameId,
+        bool(sm['modelV2'].yoloLead),
+        leads_v3[0],
+        self.radar_state.leadOne,
+      )
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
