@@ -428,8 +428,8 @@ def main(demo=False):
     if model_output is not None:
       model_lead_snapshot = {
         "prob": _model_output_value(model_output, "lead_prob", (0, 0)),
-        "x": _model_output_value(model_output, "lead", (0, 0, 0)),
-        "y": _model_output_value(model_output, "lead", (0, 0, 1)),
+        "x": _model_output_value(model_output, "lead", (0, 0, 0, 0)),
+        "y": _model_output_value(model_output, "lead", (0, 0, 0, 1)),
       }
       yolo_lead_used = apply_yolo_lead_if_needed(model_output, yolo_lead)
       yolo_eval_logger.record_model_frame(

@@ -20,7 +20,7 @@ from typing import Any
 
 WINDOW_SECONDS = 120.0
 MAX_ERROR_SAMPLES = 4096
-MAX_EVENTS = 100
+MAX_EVENTS = 40
 MAX_TIME_SAMPLES = 32
 TIME_SAMPLE_SECONDS = 5.0
 YOLO_EVAL_ENABLED = os.getenv("DP_YOLO_EVAL_ENABLED", "0") not in ("0", "false", "False")
@@ -99,13 +99,12 @@ class _Window:
       }
       for name, _, _ in DISTANCE_BINS
     }
-    self.events: list[dict[str, Any]] = []
+    self.events = deque(maxlen=MAX_EVENTS)
     self.time_samples: list[dict[str, Any]] = []
     self.last_sample_mono = 0.0
 
   def add_event(self, event: dict[str, Any]) -> None:
-    if len(self.events) < MAX_EVENTS:
-      self.events.append(event)
+    self.events.append(event)
 
   def add_time_sample(self, sample: dict[str, Any], now_mono: float) -> None:
     if now_mono - self.last_sample_mono >= TIME_SAMPLE_SECONDS or not self.time_samples:
@@ -157,7 +156,7 @@ class _Window:
       },
       "distance_bins": bins,
       "time_samples": self.time_samples,
-      "events": self.events,
+      "events": list(self.events),
     }
 
 
@@ -252,11 +251,11 @@ class YoloEvalLogger:
     ) or 0.0
     model_x = (
       _finite_float(model_lead.get("x"))
-      if model_lead is not None else _array_value(model_output, "lead", (0, 0, 0))
+      if model_lead is not None else _array_value(model_output, "lead", (0, 0, 0, 0))
     )
     model_y = (
       _finite_float(model_lead.get("y"))
-      if model_lead is not None else _array_value(model_output, "lead", (0, 0, 1))
+      if model_lead is not None else _array_value(model_output, "lead", (0, 0, 0, 1))
     )
     yolo_prob = _finite_float(getattr(yolo_lead, "prob", None))
     yolo_x = _finite_float(getattr(yolo_lead, "x", None))

@@ -8,9 +8,11 @@ from openpilot.selfdrive.modeld.yolo_eval_logger import YoloEvalLogger
 
 
 def make_model_output(prob: float = 0.8, x: float = 20.0, y: float = 0.0):
+  lead = np.zeros((1, 3, 6, 4), dtype=np.float32)
+  lead[0, 0, 0] = [x, y, 0.0, 0.0]
   return {
     "lead_prob": np.array([[prob]], dtype=np.float32),
-    "lead": np.array([[[x, y, 0.0, 0.0]]], dtype=np.float32),
+    "lead": lead,
   }
 
 
