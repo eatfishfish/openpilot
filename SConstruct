@@ -360,9 +360,14 @@ if arch != "Darwin":
 
 if arch == "larch64":
   SConscript(['system/camerad/SConscript'])
-SConscript(['system/sensord/SConscript'])
-if Dir('#tools/webcam').exists() and File('#tools/webcam/SConscript').exists():
-  SConscript(['tools/webcam/SConscript'])
+# This fork does not ship system/sensord (the C++ IMU/sensor daemon); the python
+# replacement lives in system/sensordnew. Commented out so scons does not fail on
+# a missing SConscript. Re-enable together with the directory if it ever returns.
+# SConscript(['system/sensord/SConscript'])
+# This fork does not ship tools/webcam either. The guard below already makes the
+# build skip it, kept commented out for clarity.
+# if Dir('#tools/webcam').exists() and File('#tools/webcam/SConscript').exists():
+#   SConscript(['tools/webcam/SConscript'])
 # Build openpilot
 SConscript(['third_party/SConscript'])
 
