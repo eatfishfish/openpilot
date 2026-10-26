@@ -1,108 +1,89 @@
-<div align="center" style="text-align: center;">
+# openpilot（ubuntu-AMD 分支）
 
-<h1>openpilot</h1>
+这是一个个人维护的 openpilot 派生版本，**不是** comma.ai 的官方发行版，也不是给 comma 3/3X 用的安装包。
 
-<p>
-  <b>openpilot is an operating system for robotics.</b>
-  <br>
-  Currently, it upgrades the driver assistance system in 300+ supported cars.
-</p>
+本分支（`ubuntu-AMD`）面向 **Ubuntu 平台的 AMD 硬件**，而不是 AGNOS / comma 3/3X 设备。
 
-<h3>
-  <a href="https://docs.comma.ai">Docs</a>
-  <span> · </span>
-  <a href="https://docs.comma.ai/contributing/roadmap/">Roadmap</a>
-  <span> · </span>
-  <a href="https://github.com/commaai/openpilot/blob/master/docs/CONTRIBUTING.md">Contribute</a>
-  <span> · </span>
-  <a href="https://discord.comma.ai">Community</a>
-  <span> · </span>
-  <a href="https://comma.ai/shop">Try it on a comma 3X</a>
-</h3>
+## 与上游的关系
 
-Quick start: `bash <(curl -fsSL openpilot.comma.ai)`
+```
+commaai/openpilot  ──派生──▶  dragonpilot  ──派生──▶  本仓库
+```
 
-[![openpilot tests](https://github.com/commaai/openpilot/actions/workflows/selfdrive_tests.yaml/badge.svg)](https://github.com/commaai/openpilot/actions/workflows/selfdrive_tests.yaml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![X Follow](https://img.shields.io/twitter/follow/comma_ai)](https://x.com/comma_ai)
-[![Discord](https://img.shields.io/discord/469524606043160576)](https://discord.comma.ai)
+- 基座提交：`1508b2a6e31204c2fb41dd023412c90808236940`（2025-08-19，记录在 `git_src_commit` 中）
+- 代码结构与 dragonpilot 一致，本仓库在其基础上继续修改
+- 与 dragonpilot 的差异见下方「本仓库的改动」和提交历史
 
-</div>
+## 本仓库的改动
 
-<table>
-  <tr>
-    <td><a href="https://youtu.be/NmBfgOanCyk" title="Video By Greer Viau"><img src="https://github.com/commaai/openpilot/assets/8762862/2f7112ae-f748-4f39-b617-fabd689c3772"></a></td>
-    <td><a href="https://youtu.be/VHKyqZ7t8Gw" title="Video By Logan LeGrand"><img src="https://github.com/commaai/openpilot/assets/8762862/92351544-2833-40d7-9e0b-7ef7ae37ec4c"></a></td>
-    <td><a href="https://youtu.be/SUIZYzxtMQs" title="A drive to Taco Bell"><img src="https://github.com/commaai/openpilot/assets/8762862/05ceefc5-2628-439c-a9b2-89ce77dc6f63"></a></td>
-  </tr>
-</table>
+| 内容 | 说明 |
+|---|---|
+| YOLO 前车检测 | `selfdrive/modeld/yolo.py`、`modeld.py`、`tests/test_yolo.py` 对齐 dragonpilot 的版本，包含 `YoloLaneFilter` 车道线过滤 |
+| vision-only 兜底设计 | 见 [`YOLO_VISION_ONLY_FALLBACK.md`](YOLO_VISION_ONLY_FALLBACK.md)，为 YOLO 单独检测到的目标提供受限的减速判断 |
+| 构建脚本 | `SConstruct` 中注释掉了 `system/sensord`、`tools/webcam` 的 SConscript（原因见下） |
+| 换行符 | `.gitattributes` 强制 `eol=lf`，全仓库已统一为 LF |
 
+## 未随本分支迁移的模块
 
-Using openpilot in a car
-------
+这些目录在 dragonpilot 中存在，但本仓库**没有**包含：
 
-To use openpilot in a car, you need four things:
-1. **Supported Device:** a comma 3/3X, available at [comma.ai/shop](https://comma.ai/shop/comma-3x).
-2. **Software:** The setup procedure for the comma 3/3X allows users to enter a URL for custom software. Use the URL `openpilot.comma.ai` to install the release version.
-3. **Supported Car:** Ensure that you have one of [the 275+ supported cars](docs/CARS.md).
-4. **Car Harness:** You will also need a [car harness](https://comma.ai/shop/car-harness) to connect your comma 3/3X to your car.
+| 目录 | 原用途 | 现状 |
+|---|---|---|
+| `system/sensord/` | C++ 版 IMU / 磁力计驱动（bmx055、lsm6ds3、mmc5603nj） | 未迁移。Python 版 `system/sensordnew/` 保留 |
+| `tools/webcam/` | USB 摄像头采集工具 | 未迁移 |
+| `agent/` | 本地 AI agent（MCP server / DeepSeek 接入） | 未迁移 |
+| `rear/` | 后视摄像头 Qt 程序 | 未迁移 |
 
-We have detailed instructions for [how to install the harness and device in a car](https://comma.ai/setup). Note that it's possible to run openpilot on [other hardware](https://blog.comma.ai/self-driving-car-for-free/), although it's not plug-and-play.
+因此 `SConstruct` 里对应的两行 `SConscript(...)` 已注释，否则 `scons` 会因为找不到文件直接失败。
 
-### Branches
-| branch           | URL                                    | description                                                                         |
-|------------------|----------------------------------------|-------------------------------------------------------------------------------------|
-| `release3`         | openpilot.comma.ai                      | This is openpilot's release branch.                                                 |
-| `release3-staging` | openpilot-test.comma.ai                | This is the staging branch for releases. Use it to get new releases slightly early. |
-| `nightly`          | openpilot-nightly.comma.ai             | This is the bleeding edge development branch. Do not expect this to be stable.      |
-| `nightly-dev`      | installer.comma.ai/commaai/nightly-dev | Same as nightly, but includes experimental development features for some cars.      |
-| `secretgoodopenpilot` | installer.comma.ai/commaai/secretgoodopenpilot | This is a preview branch from the autonomy team where new driving models get merged earlier than master. |
+## 已知问题
 
-To start developing openpilot
-------
+1. **sensord 运行时缺失**：`system/manager/process_config.py` 里仍然是
 
-openpilot is developed by [comma](https://comma.ai/) and by users like you. We welcome both pull requests and issues on [GitHub](http://github.com/commaai/openpilot).
+   ```python
+   NativeProcess("sensord", "system/sensord", ["./sensord"], only_onroad),
+   ```
 
-* Join the [community Discord](https://discord.comma.ai)
-* Check out [the contributing docs](docs/CONTRIBUTING.md)
-* Check out the [openpilot tools](tools/)
-* Code documentation lives at https://docs.comma.ai
-* Information about running openpilot lives on the [community wiki](https://github.com/commaai/openpilot/wiki)
+   但 `system/sensord/` 目录不存在，这一进程会一直启动失败，陀螺仪 / 加速度计没有数据，
+   依赖 IMU 的定位与校准会受影响。需要改成下面这行（`system/sensordnew` 是 Python 实现）：
 
-Want to get paid to work on openpilot? [comma is hiring](https://comma.ai/jobs#open-positions) and offers lots of [bounties](https://comma.ai/bounties) for external contributors.
+   ```python
+   PythonProcess("sensord", "system.sensordnew.sensord", only_onroad),
+   ```
 
-Safety and Testing
-----
+2. 未迁移模块中如果还有其它代码引用（例如 UI 里指向 `dragonpilot/agent` 的入口），
+   在实际运行时才会暴露，本分支未做完整清理。
 
-* openpilot observes [ISO26262](https://en.wikipedia.org/wiki/ISO_26262) guidelines, see [SAFETY.md](docs/SAFETY.md) for more details.
-* openpilot has software-in-the-loop [tests](.github/workflows/selfdrive_tests.yaml) that run on every commit.
-* The code enforcing the safety model lives in panda and is written in C, see [code rigor](https://github.com/commaai/panda#code-rigor) for more details.
-* panda has software-in-the-loop [safety tests](https://github.com/commaai/panda/tree/master/tests/safety).
-* Internally, we have a hardware-in-the-loop Jenkins test suite that builds and unit tests the various processes.
-* panda has additional hardware-in-the-loop [tests](https://github.com/commaai/panda/blob/master/Jenkinsfile).
-* We run the latest openpilot in a testing closet containing 10 comma devices continuously replaying routes.
+## 构建与运行
 
-<details>
-<summary>MIT Licensed</summary>
+依赖与上游 openpilot 相同：Python 3.11 / 3.12、clang、OpenCL、Cap'n Proto 等，详见 `docs/`。
 
-openpilot is released under the MIT license. Some parts of the software are released under other licenses as specified.
+```bash
+# Python 依赖，定义在 pyproject.toml 的 dependencies 里
+pip install -e .
 
-Any user of this software shall indemnify and hold harmless Comma.ai, Inc. and its directors, officers, employees, agents, stockholders, affiliates, subcontractors and customers from and against all allegations, claims, actions, suits, demands, damages, liabilities, obligations, losses, settlements, judgments, costs and expenses (including without limitation attorneys’ fees and costs) which arise out of, relate to or result from any use of this software by user.
+# 编译
+scons -u -j$(nproc)
 
-**THIS IS ALPHA QUALITY SOFTWARE FOR RESEARCH PURPOSES ONLY. THIS IS NOT A PRODUCT.
-YOU ARE RESPONSIBLE FOR COMPLYING WITH LOCAL LAWS AND REGULATIONS.
-NO WARRANTY EXPRESSED OR IMPLIED.**
-</details>
+# 启动
+./launch_openpilot.sh
+```
 
-<details>
-<summary>User Data and comma Account</summary>
+`scons` 只编译当前分支实际存在的模块；因为 sensord / webcam 已从构建里摘掉，
+首次编译不会再因为缺文件报错。
 
-By default, openpilot uploads the driving data to our servers. You can also access your data through [comma connect](https://connect.comma.ai/). We use your data to train better models and improve openpilot for everyone.
+## 关于数据
 
-openpilot is open source software: the user is free to disable data collection if they wish to do so.
+本仓库**只包含源代码**，不包含任何行车数据：
 
-openpilot logs the road-facing cameras, CAN, GPS, IMU, magnetometer, thermal sensors, crashes, and operating system logs.
-The driver-facing camera and microphone are only logged if you explicitly opt-in in settings.
+- 没有摄像头画面、没有陀螺仪 / 加速度计原始数据、没有 route 日志
+- `realdata/`、`*.hevc`、`fcamera.*`、`qcamera.*`、`rlog*` 等日志文件不应提交到本仓库
+- 上游 openpilot 默认会把行车数据上传到 comma 的服务器；本分支不保证这一行为，
+  是否上传取决于你自己的设备配置，请在设置里自行确认
 
-By using openpilot, you agree to [our Privacy Policy](https://comma.ai/privacy). You understand that use of this software or its related services will generate certain types of user data, which may be logged and stored at the sole discretion of comma. By accepting this agreement, you grant an irrevocable, perpetual, worldwide right to comma for the use of this data.
-</details>
+## 许可与免责
+
+openpilot 以 MIT 协议发布，部分组件使用其它协议，详见 `LICENSE` 与各目录下的许可文件。
+
+**这是研究用途的 alpha 质量软件，不是产品。**
+使用者需自行遵守当地法律法规，并对使用后果负责。无任何明示或暗示的担保。
