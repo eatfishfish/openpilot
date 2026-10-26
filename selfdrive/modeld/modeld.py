@@ -44,6 +44,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.yolo import (
   YOLO_ENABLED,
   RoadYoloRunner,
+  YoloLaneFilter,
   apply_yolo_lead_if_needed,
   get_last_yolo_rejection_reason,
 )
@@ -291,6 +292,7 @@ def main(demo=False):
     cl_context=cl_context,
   )
   yolo_runner.start()
+  yolo_lane_filter = YoloLaneFilter()
   yolo_eval_logger = YoloEvalLogger("modeld")
 
   # messaging
@@ -423,9 +425,13 @@ def main(demo=False):
     # wait for its YOLO result, so modeld can catch up to the live stream.
     model_elapsed_ms = (time.perf_counter() - mt1) * 1000.0
     yolo_wait_ms = max(0.0, MODELD_FRAME_BUDGET_MS - model_elapsed_ms)
-    yolo_lead = None if prepare_only else yolo_runner.wait_for_frame(meta_main.frame_id, yolo_wait_ms)
+    yolo_candidates = None if prepare_only else yolo_runner.wait_for_candidates(meta_main.frame_id, yolo_wait_ms)
 
     if model_output is not None:
+      yolo_lead = (
+        yolo_lane_filter.update(model_output, yolo_candidates or [], meta_main.frame_id)
+        if yolo_candidates is not None else None
+      )
       model_lead_snapshot = {
         "prob": _model_output_value(model_output, "lead_prob", (0, 0)),
         "x": _model_output_value(model_output, "lead", (0, 0, 0, 0)),

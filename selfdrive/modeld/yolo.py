@@ -33,6 +33,12 @@ YOLO_CPU_CORES = tuple(int(core.strip()) for core in os.getenv("DP_YOLO_CPU_CORE
 YOLO_DEFAULT_REAL_WIDTH = 0.5
 YOLO_LANE_PROB_THRESHOLD = 0.5
 YOLO_LANE_MARGIN = 0.1
+YOLO_LANE_MIN_WIDTH = 2.3
+YOLO_LANE_MAX_WIDTH = 5.5
+YOLO_LANE_STABLE_FRAMES = 3
+YOLO_LANE_MAX_X_JUMP = 3.0
+YOLO_LANE_MAX_X_JUMP_RATIO = 0.35
+YOLO_LANE_MAX_Y_JUMP = 1.0
 YOLO_LANE_OBSTACLE_CLASS_IDS = {0, 1, 2, 3, 5, 7, 16, 17, 18, 19}
 YOLO_REAL_WIDTH_BY_CLASS = [
   0.50, 0.60, 1.80, 0.80, 2.50, 2.50, 3.00, 2.50,
@@ -63,6 +69,10 @@ class YoloLead:
   frame_id: int
   timestamp_eof: int
   created_t: float
+  box: tuple[int, int, int, int] | None = None
+  class_id: int = -1
+  left_y: float | None = None
+  right_y: float | None = None
 
 
 @dataclass
@@ -308,20 +318,105 @@ def yolo_detection_to_lead(detection: tuple[int, float, tuple[int, int, int, int
   lead_x = (real_width * focal) / w
   center_x = x + w / 2.0
   lead_y = lead_x * ((center_x - center) / focal)
-  return YoloLead(float(score), float(lead_x), float(lead_y), 0, 0, time.monotonic())
+  left_y = lead_x * ((x - center) / focal)
+  right_y = lead_x * (((x + w) - center) / focal)
+  return YoloLead(
+    float(score), float(lead_x), float(lead_y), 0, 0, time.monotonic(),
+    tuple(int(value) for value in box), class_id, float(left_y), float(right_y),
+  )
+
+
+def yolo_lead_lane_reason(model_output: dict[str, np.ndarray], yolo_lead: YoloLead) -> str | None:
+  lane_probs = model_output["lane_lines_prob"][0, 1::2]
+  if len(lane_probs) < 2 or lane_probs[0] < YOLO_LANE_PROB_THRESHOLD or lane_probs[1] < YOLO_LANE_PROB_THRESHOLD:
+    return "lane_confidence_low"
+
+  x_idxs = np.asarray(ModelConstants.X_IDXS, dtype=np.float32)
+  if not (0.0 < yolo_lead.x <= float(x_idxs[-1])):
+    return "x_out_of_lane_range"
+
+  left_lane_y = float(np.interp(yolo_lead.x, x_idxs, model_output["lane_lines"][0, 1, :, 0]))
+  right_lane_y = float(np.interp(yolo_lead.x, x_idxs, model_output["lane_lines"][0, 2, :, 0]))
+  lane_min = min(left_lane_y, right_lane_y)
+  lane_max = max(left_lane_y, right_lane_y)
+  lane_width = lane_max - lane_min
+  if not YOLO_LANE_MIN_WIDTH <= lane_width <= YOLO_LANE_MAX_WIDTH:
+    return f"lane_width_invalid:{lane_width:.2f}"
+
+  lane_min += YOLO_LANE_MARGIN
+  lane_max -= YOLO_LANE_MARGIN
+  if not lane_min <= yolo_lead.y <= lane_max:
+    return "center_outside_lane"
+
+  # The bottom of the detection is the part occupying the road. The
+  # horizontal projection is evaluated at the estimated object distance.
+  left_y = yolo_lead.left_y if yolo_lead.left_y is not None else yolo_lead.y
+  right_y = yolo_lead.right_y if yolo_lead.right_y is not None else yolo_lead.y
+  if min(left_y, right_y) < lane_min or max(left_y, right_y) > lane_max:
+    return "body_outside_lane"
+  return None
 
 
 def yolo_lead_in_model_lane(model_output: dict[str, np.ndarray], yolo_lead: YoloLead) -> bool:
-  lane_probs = model_output["lane_lines_prob"][0, 1::2]
-  if len(lane_probs) < 2 or lane_probs[0] < YOLO_LANE_PROB_THRESHOLD or lane_probs[1] < YOLO_LANE_PROB_THRESHOLD:
-    return False
+  return yolo_lead_lane_reason(model_output, yolo_lead) is None
 
-  x_idxs = np.asarray(ModelConstants.X_IDXS, dtype=np.float32)
-  left_lane_y = float(np.interp(yolo_lead.x, x_idxs, model_output["lane_lines"][0, 1, :, 0]))
-  right_lane_y = float(np.interp(yolo_lead.x, x_idxs, model_output["lane_lines"][0, 2, :, 0]))
-  lane_min = min(left_lane_y, right_lane_y) + YOLO_LANE_MARGIN
-  lane_max = max(left_lane_y, right_lane_y) - YOLO_LANE_MARGIN
-  return lane_min <= yolo_lead.y <= lane_max
+
+class YoloLaneFilter:
+  """Filter all YOLO candidates against modeld lanes and require stability."""
+
+  def __init__(self, stable_frames: int = YOLO_LANE_STABLE_FRAMES):
+    self.stable_frames = max(1, stable_frames)
+    self.last_candidate: YoloLead | None = None
+    self.last_frame_id = -1
+    self.stable_count = 0
+
+  def reset(self) -> None:
+    self.last_candidate = None
+    self.last_frame_id = -1
+    self.stable_count = 0
+
+  def _candidate_is_continuous(self, candidate: YoloLead) -> bool:
+    if self.last_candidate is None:
+      return True
+    max_x_jump = max(YOLO_LANE_MAX_X_JUMP, abs(self.last_candidate.x) * YOLO_LANE_MAX_X_JUMP_RATIO)
+    return (
+      abs(candidate.x - self.last_candidate.x) <= max_x_jump
+      and abs(candidate.y - self.last_candidate.y) <= YOLO_LANE_MAX_Y_JUMP
+    )
+
+  def update(self, model_output: dict[str, np.ndarray],
+             candidates: list[YoloLead], frame_id: int) -> YoloLead | None:
+    if self.last_frame_id >= 0 and frame_id - self.last_frame_id > 2:
+      self.reset()
+    self.last_frame_id = frame_id
+
+    lane_candidates = [
+      candidate for candidate in candidates
+      if yolo_lead_lane_reason(model_output, candidate) is None
+    ]
+    if not lane_candidates:
+      self.reset()
+      self.last_frame_id = frame_id
+      return None
+
+    if self.last_candidate is None:
+      candidate = min(lane_candidates, key=lambda item: item.x)
+    else:
+      candidate = min(
+        lane_candidates,
+        key=lambda item: (
+          abs(item.x - self.last_candidate.x) / max(self.last_candidate.x, 1.0)
+          + abs(item.y - self.last_candidate.y),
+          item.x,
+        ),
+      )
+
+    if self._candidate_is_continuous(candidate):
+      self.stable_count += 1
+    else:
+      self.stable_count = 1
+    self.last_candidate = candidate
+    return candidate if self.stable_count >= self.stable_frames else None
 
 
 def log_yolo_rejection(reason: str, has_yolo_lead: bool = True) -> None:
@@ -330,7 +425,7 @@ def log_yolo_rejection(reason: str, has_yolo_lead: bool = True) -> None:
     return
   now = time.monotonic()
   if reason != _last_yolo_rejection_reason or now - _last_yolo_rejection_log_t >= 1.0:
-    print(f"[road_yolo26n] modelV2 lead not replaced: {reason}", flush=True)
+    # print(f"[road_yolo26n] modelV2 lead not replaced: {reason}", flush=True)
     _last_yolo_rejection_reason = reason
     _last_yolo_rejection_log_t = now
 
@@ -387,6 +482,7 @@ class RoadYoloRunner:
     self.thread: threading.Thread | None = None
     self.condition = threading.Condition()
     self.latest_lead: YoloLead | None = None
+    self.latest_candidates: list[YoloLead] = []
     self.latest_result_frame_id = -1
     self.completed_frame_id = -1
     self.pending_task: YoloTask | None = None
@@ -432,6 +528,14 @@ class RoadYoloRunner:
     return True
 
   def wait_for_frame(self, frame_id: int, timeout_ms: float = YOLO_WAIT_MS) -> YoloLead | None:
+    result = self._wait_for_result(frame_id, timeout_ms)
+    return result[0] if result is not None else None
+
+  def wait_for_candidates(self, frame_id: int, timeout_ms: float = YOLO_WAIT_MS) -> list[YoloLead] | None:
+    result = self._wait_for_result(frame_id, timeout_ms)
+    return result[1] if result is not None else None
+
+  def _wait_for_result(self, frame_id: int, timeout_ms: float) -> tuple[YoloLead | None, list[YoloLead]] | None:
     if not self.enabled:
       return None
 
@@ -450,7 +554,7 @@ class RoadYoloRunner:
           return None
         self.condition.wait(timeout=remaining)
       if self.completed_frame_id == frame_id and self.latest_result_frame_id == frame_id:
-        return self.latest_lead
+        return self.latest_lead, list(self.latest_candidates)
       return None
 
   def set_camera_intrinsics(self, intrinsics: np.ndarray, width: int, height: int):
@@ -464,14 +568,18 @@ class RoadYoloRunner:
     with self.condition:
       return None if self.intrinsics is None else self.intrinsics.copy(), self.intrinsics_size
 
-  def _set_latest_lead(self, lead: YoloLead | None, frame_id: int):
+  def _set_latest_result(self, lead: YoloLead | None, candidates: list[YoloLead], frame_id: int):
     with self.condition:
       if frame_id <= self.expired_frame_id:
         return
       self.latest_lead = lead
+      self.latest_candidates = list(candidates)
       self.latest_result_frame_id = frame_id
       self.completed_frame_id = max(self.completed_frame_id, frame_id)
       self.condition.notify_all()
+
+  def _set_latest_lead(self, lead: YoloLead | None, frame_id: int):
+    self._set_latest_result(lead, [] if lead is None else [lead], frame_id)
 
   def _set_failed(self):
     with self.condition:
@@ -703,6 +811,7 @@ class RoadYoloRunner:
       frame_start_t = time.perf_counter()
       lead = None
       detections = []
+      leads = []
       preprocess_time_ms = 0.0
       inference_time_ms = 0.0
       postprocess_time_ms = 0.0
@@ -747,6 +856,9 @@ class RoadYoloRunner:
         if lead is not None:
           lead.frame_id = task.frame_id
           lead.timestamp_eof = task.timestamp_eof
+        for candidate in leads:
+          candidate.frame_id = task.frame_id
+          candidate.timestamp_eof = task.timestamp_eof
       except Exception:
         cloudlog.exception("road yolo26n inference failed")
       finally:
@@ -754,7 +866,7 @@ class RoadYoloRunner:
           if self.active_preprocess_frame_id == task.frame_id:
             self.active_preprocess_frame_id = -1
             self.condition.notify_all()
-        self._set_latest_lead(lead, task.frame_id)
+        self._set_latest_result(lead, leads, task.frame_id)
         frame_time_ms = (time.perf_counter() - frame_start_t) * 1000.0
         self.stats_frames += 1
         self.stats_elapsed_ms += frame_time_ms

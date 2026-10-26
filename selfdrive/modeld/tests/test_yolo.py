@@ -180,6 +180,38 @@ def test_yolo_lead_is_rejected_when_lane_lines_are_unavailable():
   assert not yolo.yolo_lead_in_model_lane(model_output, lead)
 
 
+def test_yolo_lane_filter_drops_outside_candidate_before_selecting():
+  model_output = make_lane_model_output()
+  lane_filter = yolo.YoloLaneFilter(stable_frames=1)
+  outside = yolo.YoloLead(0.95, 10.0, 3.0, 1, 0, time.monotonic())
+  inside = yolo.YoloLead(0.8, 20.0, 0.0, 1, 0, time.monotonic())
+
+  selected = lane_filter.update(model_output, [outside, inside], 1)
+
+  assert selected is inside
+
+
+def test_yolo_lane_filter_requires_three_stable_frames():
+  model_output = make_lane_model_output()
+  lane_filter = yolo.YoloLaneFilter(stable_frames=3)
+  candidate = yolo.YoloLead(0.8, 20.0, 0.0, 1, 0, time.monotonic())
+
+  assert lane_filter.update(model_output, [candidate], 1) is None
+  assert lane_filter.update(model_output, [candidate], 2) is None
+  assert lane_filter.update(model_output, [candidate], 3) is candidate
+
+
+def test_yolo_lane_filter_rejects_body_crossing_lane_boundary():
+  model_output = make_lane_model_output()
+  lane_filter = yolo.YoloLaneFilter(stable_frames=1)
+  candidate = yolo.YoloLead(
+    0.8, 20.0, 0.0, 1, 0, time.monotonic(),
+    box=(0, 0, 0, 0), left_y=-2.0, right_y=0.0,
+  )
+
+  assert lane_filter.update(model_output, [candidate], 1) is None
+
+
 def test_model_lead_has_priority_by_default(monkeypatch):
   monkeypatch.setattr(yolo, "YOLO_USE_ONLY_LEAD", False)
   model_output = make_lane_model_output(0.8)
