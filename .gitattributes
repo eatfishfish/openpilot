@@ -1,2 +1,22 @@
-*.sh text eol=lf
-*.py text eol=lf
+# 统一换行符：仓库在 Windows 上检出时被 core.autocrlf 写成了 CRLF，
+# 导致 404 个文件在 diff 里表现为"整体修改"。这里强制 LF 并禁止再转回去。
+* text=auto eol=lf
+
+# 二进制文件：不做任何换行符/文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.onnx binary
+*.pt binary
+*.pkl binary
+*.bin binary
+*.so binary
+*.dylib binary
+*.a binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.mp4 binary
+*.hevc binary
